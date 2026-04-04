@@ -1,0 +1,8 @@
+[runners]
+# Replace with your VM's public IP(s) from terraform output
+# For single runner:
+# github-runner ansible_host=YOUR_VM_PUBLIC_IP ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_ed25519
+
+# For multiple runners:
+# github-runner-1 ansible_host=IP_1 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_ed25519
+# github-runner-2 ansible_host=IP_2 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_ed25519

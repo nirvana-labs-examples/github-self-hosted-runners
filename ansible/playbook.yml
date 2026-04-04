@@ -1,0 +1,166 @@
+---
+- name: Install GitHub Actions Self-Hosted Runner
+  hosts: runners
+  become: yes
+  vars:
+    runner_version: "2.321.0"
+    runner_user: "runner"
+    runner_dir: "/opt/actions-runner"
+    runner_labels: "self-hosted,Linux,X64"
+
+  vars_prompt:
+    - name: github_pat
+      prompt: "Enter your GitHub Personal Access Token (with repo or admin:org scope)"
+      private: yes
+
+    - name: github_owner
+      prompt: "Enter GitHub owner (username or organization)"
+      private: no
+
+    - name: github_repo
+      prompt: "Enter GitHub repository name (leave empty for org-level runner)"
+      private: no
+      default: ""
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install dependencies
+      apt:
+        name:
+          - curl
+          - git
+          - jq
+          - build-essential
+          - libssl-dev
+          - libffi-dev
+          - python3
+          - python3-pip
+        state: present
+
+    - name: Install Docker
+      block:
+        - name: Install Docker prerequisites
+          apt:
+            name:
+              - ca-certificates
+              - gnupg
+              - lsb-release
+            state: present
+
+        - name: Add Docker GPG key
+          shell: |
+            install -m 0755 -d /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
+            chmod a+r /etc/apt/keyrings/docker.gpg
+
+        - name: Add Docker repository
+          shell: |
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+        - name: Install Docker
+          apt:
+            name:
+              - docker-ce
+              - docker-ce-cli
+              - containerd.io
+              - docker-buildx-plugin
+              - docker-compose-plugin
+            state: present
+            update_cache: yes
+
+        - name: Start and enable Docker
+          systemd:
+            name: docker
+            state: started
+            enabled: yes
+
+    - name: Create runner user
+      user:
+        name: "{{ runner_user }}"
+        shell: /bin/bash
+        groups: docker
+        append: yes
+        create_home: yes
+
+    - name: Create runner directory
+      file:
+        path: "{{ runner_dir }}"
+        state: directory
+        owner: "{{ runner_user }}"
+        group: "{{ runner_user }}"
+        mode: '0755'
+
+    - name: Download GitHub Actions Runner
+      get_url:
+        url: "https://github.com/actions/runner/releases/download/v{{ runner_version }}/actions-runner-linux-x64-{{ runner_version }}.tar.gz"
+        dest: "/tmp/actions-runner.tar.gz"
+        mode: '0644'
+
+    - name: Extract runner
+      unarchive:
+        src: "/tmp/actions-runner.tar.gz"
+        dest: "{{ runner_dir }}"
+        remote_src: yes
+        owner: "{{ runner_user }}"
+        group: "{{ runner_user }}"
+
+    - name: Get registration token from GitHub API
+      uri:
+        url: "{{ 'https://api.github.com/repos/' + github_owner + '/' + github_repo + '/actions/runners/registration-token' if github_repo else 'https://api.github.com/orgs/' + github_owner + '/actions/runners/registration-token' }}"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ github_pat }}"
+          Accept: "application/vnd.github+json"
+          X-GitHub-Api-Version: "2022-11-28"
+        status_code: 201
+      register: registration_token_response
+      delegate_to: localhost
+      become: no
+
+    - name: Set registration token fact
+      set_fact:
+        runner_token: "{{ registration_token_response.json.token }}"
+
+    - name: Configure runner
+      become_user: "{{ runner_user }}"
+      shell: |
+        ./config.sh --url "{{ 'https://github.com/' + github_owner + '/' + github_repo if github_repo else 'https://github.com/' + github_owner }}" \
+          --token "{{ runner_token }}" \
+          --name "{{ ansible_hostname }}" \
+          --labels "{{ runner_labels }}" \
+          --unattended \
+          --replace
+      args:
+        chdir: "{{ runner_dir }}"
+
+    - name: Install runner as service
+      shell: ./svc.sh install {{ runner_user }}
+      args:
+        chdir: "{{ runner_dir }}"
+
+    - name: Start runner service
+      shell: ./svc.sh start
+      args:
+        chdir: "{{ runner_dir }}"
+
+    - name: Get runner service status
+      shell: ./svc.sh status
+      args:
+        chdir: "{{ runner_dir }}"
+      register: runner_status
+
+    - name: Display runner status
+      debug:
+        msg: |
+          ================================================
+          GitHub Actions Runner installed successfully!
+          ================================================
+          Host: {{ ansible_hostname }}
+          Runner Name: {{ ansible_hostname }}
+          Labels: {{ runner_labels }}
+          Status: {{ runner_status.stdout }}
+          ================================================
