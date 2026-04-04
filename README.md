@@ -16,18 +16,18 @@ Deploy GitHub Actions self-hosted runners on Nirvana Labs cloud infrastructure.
 │   └── inventory.ini.example
 ├── scripts/
 │   └── generate-inventory.sh
+├── images/
+│   └── runner-success.png
 └── README.md
 ```
 
 ## Prerequisites
 
 - [Terraform](https://www.terraform.io/downloads) >= 1.0
-- [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/) >= 2.9
+- [Ansible](https://docs.ansible.com/ansible/latest/installation_guide/) >= 2.9 (for automated method)
 - Nirvana Labs account and API key
 - SSH key pair
-- GitHub Personal Access Token (PAT) with:
-  - `repo` scope (for repository-level runners)
-  - `admin:org` scope (for organization-level runners)
+- GitHub Personal Access Token (PAT) with `Administration` read/write permission
 
 ## Resources Created
 
@@ -53,7 +53,15 @@ terraform apply -var='ssh_public_key=ssh-ed25519 AAAA...' -var='project_id=your-
 
 Note the `vm_public_ips` output.
 
+---
+
 ### 2. Install GitHub Runner
+
+Choose one of the following methods:
+
+---
+
+#### Option A: Automated (Ansible)
 
 ```bash
 # Generate inventory from terraform output
@@ -70,10 +78,80 @@ The playbook will prompt for:
 2. **GitHub Owner** - Your username or organization name
 3. **GitHub Repo** - Repository name (leave empty for org-level runner)
 
+Or pass variables directly:
+
+```bash
+ansible-playbook playbook.yml \
+  -e "github_pat=ghp_xxxx" \
+  -e "github_owner=your-username" \
+  -e "github_repo=your-repo"
+```
+
+---
+
+#### Option B: Manual Installation
+
+SSH into the VM:
+
+```bash
+ssh ubuntu@<vm_public_ip>
+```
+
+Install dependencies:
+
+```bash
+sudo apt update
+sudo apt install -y curl git jq docker.io
+sudo systemctl enable docker
+sudo systemctl start docker
+```
+
+Create runner user:
+
+```bash
+sudo useradd -m -s /bin/bash runner
+sudo usermod -aG docker runner
+```
+
+Download and extract runner:
+
+```bash
+sudo mkdir -p /opt/actions-runner
+cd /opt/actions-runner
+sudo curl -o actions-runner-linux-x64.tar.gz -L https://github.com/actions/runner/releases/download/v2.321.0/actions-runner-linux-x64-2.321.0.tar.gz
+sudo tar xzf actions-runner-linux-x64.tar.gz
+sudo chown -R runner:runner /opt/actions-runner
+```
+
+Get registration token from GitHub:
+1. Go to your repo → Settings → Actions → Runners
+2. Click "New self-hosted runner"
+3. Copy the token from the configuration command
+
+Configure runner:
+
+```bash
+sudo -u runner ./config.sh --url https://github.com/OWNER/REPO --token YOUR_TOKEN --name $(hostname) --labels self-hosted,Linux,X64 --unattended
+```
+
+Install and start as service:
+
+```bash
+sudo ./svc.sh install runner
+sudo ./svc.sh start
+sudo ./svc.sh status
+```
+
+---
+
 ### 3. Verify Runner
 
-1. Go to your repository/organization Settings → Actions → Runners
-2. You should see your runner(s) listed as "Idle"
+1. Go to your repository Settings → Actions → Runners
+2. You should see your runner listed as "Idle"
+
+![Runner Success](images/runner-success.png)
+
+The runner is configured as a **systemd service** and will automatically start on VM boot.
 
 ## Multiple Runners
 
@@ -109,8 +187,6 @@ Each runner will be registered separately with GitHub.
 
 ## Ansible Variables
 
-The playbook uses these defaults (can be overridden):
-
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `runner_version` | `2.321.0` | GitHub runner version |
@@ -118,14 +194,37 @@ The playbook uses these defaults (can be overridden):
 | `runner_dir` | `/opt/actions-runner` | Installation directory |
 | `runner_labels` | `self-hosted,Linux,X64` | Runner labels |
 
-## Creating a GitHub PAT
+## Creating a GitHub PAT (Fine-grained)
 
-1. Go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. Click "Generate new token (classic)"
-3. Select scopes:
-   - For repo-level runner: `repo` (full control)
-   - For org-level runner: `admin:org`
-4. Copy the token and use it when running the playbook
+1. Go to GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens
+2. Click "Generate new token"
+3. Select the repository
+4. Under Repository permissions, set **Administration** to **Read and write**
+5. Generate and copy the token
+
+## Using the Runner
+
+Create a workflow file (`.github/workflows/test.yml`):
+
+```yaml
+name: Test Self-Hosted Runner
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run a script
+        run: |
+          echo "Hello from self-hosted runner!"
+          hostname
+          docker --version
+```
 
 ## Clean Up
 
@@ -137,7 +236,7 @@ SSH into the VM and run:
 cd /opt/actions-runner
 sudo ./svc.sh stop
 sudo ./svc.sh uninstall
-./config.sh remove --token YOUR_REMOVAL_TOKEN
+sudo -u runner ./config.sh remove --token YOUR_REMOVAL_TOKEN
 ```
 
 Get the removal token from: Settings → Actions → Runners → [Your Runner] → Remove
@@ -168,4 +267,11 @@ terraform destroy -var='ssh_public_key=...' -var='project_id=...'
 Ensure the runner user is in the docker group:
 ```bash
 ssh ubuntu@<ip> "sudo usermod -aG docker runner && sudo systemctl restart actions.runner.*"
+```
+
+### Runner offline after reboot
+
+The runner is installed as a systemd service with `enabled` status, so it starts automatically on boot. If not:
+```bash
+ssh ubuntu@<ip> "sudo systemctl enable actions.runner.* && sudo systemctl start actions.runner.*"
 ```
