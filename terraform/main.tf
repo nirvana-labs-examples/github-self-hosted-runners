@@ -38,14 +38,7 @@ resource "nirvana_compute_vm" "runner" {
   os_image_name     = var.os_image
   public_ip_enabled = true
   subnet_id         = nirvana_networking_vpc.runner.subnet.id
-
-  cpu_config = {
-    vcpu = var.vcpu
-  }
-
-  memory_config = {
-    size = var.memory_gb
-  }
+  instance_type     = var.instance_type
 
   boot_volume = {
     size = var.boot_volume_gb
