@@ -34,16 +34,10 @@ variable "runner_count" {
   default     = 1
 }
 
-variable "vcpu" {
-  description = "Number of vCPUs"
-  type        = number
-  default     = 4
-}
-
-variable "memory_gb" {
-  description = "Memory size in GB"
-  type        = number
-  default     = 8
+variable "instance_type" {
+  description = "Instance type (e.g., n1-standard-2, n1-standard-4)"
+  type        = string
+  default     = "n1-standard-4"
 }
 
 variable "boot_volume_gb" {
