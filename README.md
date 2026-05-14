@@ -286,3 +286,7 @@ The runner is installed as a systemd service with `enabled` status, so it starts
 ```bash
 ssh ubuntu@<ip> "sudo systemctl enable actions.runner.* && sudo systemctl start actions.runner.*"
 ```
+
+## License
+
+Apache 2.0 — see [LICENSE](LICENSE.md).
